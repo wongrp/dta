@@ -1,19 +1,3 @@
-""" 
-Encode: takes processed and smoothed graphs and runs them through learnable layers. 
-Intra: interactions within entities. This includes protein+ligand atoms in contact with each other
-Inter: interactions between entities. With how intra is defined, this is very optional. 
-Virtual: interactions between entities and virtual nodes
-Fuse: fusing operations that don't fall into Inter of Virtual. 
-Readouts: extracts graph-level scalars. Mathematically equivalent to global virtual interactions 
-Final: the final readout. 
-
-
-CONVENTIONS 
-1. Any edge key should correspond to a separate graph already in the data structure. No copies are created. 
-2. Virtual nodes are considered as separate graphs that can have edges with any other graph
-3. Each graph has its own readout "feature" given by d["name"].readout. We can reuse virtual node edge index for that. 
-"""
-
 from e3nn.o3 import FullyConnectedTensorProduct, Irreps, Linear
 from e3nn.nn import Gate
 
@@ -24,7 +8,7 @@ from itertools import chain
 import torch
 from torch import nn
 from net_operations import EncodeAtom, EncodeResidueNodes, EncodeCombined
-from net_fusion import MLPFusion, AddSubFusion, GatedFusion, TransformerFusion, CrossAttentionFusion
+from net_fusion import MLP, CrossAttention
 from net_convs import Conv 
 
 torch.set_printoptions(
@@ -303,15 +287,11 @@ class Net(nn.Module):
     def get_fuse(self, in_dim, out_dim=None, type ='MLP', num_objects=4):
 
         if type == 'MLP':
-            return MLPFusion(in_dim, out_dim or in_dim, num_objects=num_objects)
-        elif type == 'add_sub':
-            return AddSubFusion(in_dim, out_dim or in_dim, num_objects=num_objects)
-        elif type == 'gate':
-            return GatedFusion(in_dim)
+            return MLP(in_dim, out_dim or in_dim, num_objects=num_objects)
         elif type == 'cross_att':
-            return CrossAttentionFusion(in_dim)
+            return CrossAttention(in_dim)
         elif type == 'transformer':
-            return TransformerFusion(in_dim)
+            return Transformer(in_dim)
         else:
             raise ValueError(f"Unknown fusion type: {type}")
 
@@ -320,7 +300,6 @@ class Net(nn.Module):
         self.schedule = [i for j in self.schedule for i in j]
         # self.field = self.alias_to_name(self.field)
     
-
     def alias_to_name(self, aliases):
         return [self.alias_map[alias.strip()] for alias in aliases if alias.strip() in self.alias_map]
 
@@ -330,16 +309,3 @@ class Net(nn.Module):
 
 
 
-### TODO ### 
-''' 
-1. nodes are not separated right now 
-
-
-1. Implement attention self interaction https://proceedings.neurips.cc/paper/2020/file/15231a7ce4ba789d13b722cc5c955834-Paper.pdf
-2. implement hit time commute time https://arxiv.org/pdf/2407.01635 
-    This is a preprocessing step for both pocket and residue. 
-3. Many possible representations --> fusing them 
-3. https://www.mdpi.com/1099-4300/26/11/997
-4. edge feature updates
-
-''' 
