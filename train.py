@@ -14,22 +14,14 @@ import yaml
 import wandb
 from datetime import datetime
 
-from models.lba_model import LBAPredictor
-from binding_data import PLBA_Dataset
-from dmasif_encoder.data_iteration import iterate_surface_precompute
 
 from train_data_location import train_path, val_path, test_path 
 from net_transform_graphs_ import  *
 from net_logic import field,schedule,l_schedule, args, edge_sets 
 from net_analysis import TrackOutput, TrackReps, DatasetStatistics
 
-
-from process_dnops import precompute_dnops
-
-from surface_data_utils import sparse_tlist_to_block_diagonal
 import pickle 
 from tqdm import tqdm 
-from diffusion_net_plus.utils import sparse_np_to_sparse_tensor
 from torch_geometric.data import Batch
 
 import time
@@ -48,8 +40,6 @@ g = torch.Generator()
 g.manual_seed(seed)
 
         
-
-
 def metrics_reg(targets,predicts):
     mae = metrics.mean_absolute_error(y_true=targets,y_pred=predicts)
     # rmse = metrics.mean_squared_error(y_true=targets,y_pred=predicts,squared=False)
