@@ -36,7 +36,6 @@ in pl_node, protein first ligand next
 
 import torch 
 from net_logic import field 
-from models_mp.build_graph import (build_ligand_graph, build_pl_graph, build_protein_graph, build_l_readout, build_p_readout, build_pl_readout)
 from e3nn import o3 
 from functools import partial
 from build_graph_ import build_graph, build_readout 
