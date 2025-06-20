@@ -1,0 +1,87 @@
+# Optional: ignore all and manually include 
+*
+
+# scripts to include 
+# env 
+# !env.yml
+# !environment.yaml 
+!requirements.txt
+!.gitattributes
+!.gitignore
+
+# training
+!train.py
+!train_data_location.py
+
+# args
+!args.py 
+
+# network 
+!net.py
+!net_fusion.py
+!net_operations.py 
+!net_transform_graphs_.py
+!build_graph_.py
+!net_convs.py
+!net_analysis.py
+!net_logic.py
+!net_l_schedule.py 
+
+# processing 
+!process_pdbbind.py
+!process_pdbbind_utils.py
+!utils/
+!utils/** 
+
+# dataset 
+!processed_data/
+!processed_data/refined2016/
+!processed_data/refined2016/basic/
+!processed_data/refined2016/basic/**
+# ignore the caches 
+processed_data/*/*/cache 
+!data_inspect/
+!data_inspect/** 
+
+# test 
+!test_so3_equivariance.py
+!test_transform_graphs.py
+
+
+# Ignore Python bytecode and cache
+__pycache__/
+*.py[cod]
+
+# Ignore Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# Ignore environment and config files
+.env
+# *.yaml
+# *.yml
+
+# Ignore large datasets and model files
+*.pt
+*.h5
+# *.pkl
+*.npy
+*.npz
+# *.csv
+
+# Ignore molecular dynamics files
+*.dcd
+*.xtc
+*.trr
+*.edr
+*.gro
+*.log
+*.out
+*.tpr
+
+# Ignore system files
+.DS_Store
+
+# Ignore logs and outputs
+logs/
+outputs/
+checkpoints/
