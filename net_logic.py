@@ -37,6 +37,11 @@ MODES = {
         'field': ['r', 'l'],
         'schedule': [['rr','ll']] * args.layers
     },
+    'rlpz': 
+    {
+        'field': ['r', 'l','p','z'],
+        'schedule': [['rr','ll', 'pp','zz']] * args.layers
+    },
 }
 
 """ 

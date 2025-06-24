@@ -96,9 +96,10 @@ class Net(nn.Module):
 
 
     def forward(self,data): 
-        self.encode(data) 
         self.layer_outputs.clear()
-        self.irrep_schedule.clear()   
+        self.irrep_schedule.clear() 
+        self.encode(data) 
+
         # print(f"check {data['protein', 'global', 'virtual_r'].edge_index[1].unique()}") 
         # print(f"check {data['pocket', 'global', 'virtual_p'].edge_index[1].unique()}") 
     
@@ -111,8 +112,9 @@ class Net(nn.Module):
             edge_attr = d.edge_attr
             sh = d.sh
             xsrc = data[key[0]].ft[src]
-            xdst = data[key[2]].ft
+            xdst = data[key[2]].ft[dst]
             data[key[2]].ft = conv(dst,xsrc,xdst,sh,edge_attr) 
+            # data[key].edge_attr = 
             if self.inspect: 
                 # print(f"{key[2]} layer {idx} features {data[key[2]].ft.shape} \n: {data[key[2]].ft}")
                 self.irrep_schedule.append({'name': f"hidden layer {idx} {key[2]}", 'irreps': [conv.irreps_in_src, conv.irreps_sh, conv.irreps_out,conv.irreps_in_dst]})
@@ -154,8 +156,10 @@ class Net(nn.Module):
             name = self.alias_map[name]
             if isinstance(self.node_encoders[name],EncodeCombined): 
                 data[name].ft = self.node_encoders[name](data[name].ft, data[name].is_type1) 
+                self.layer_outputs.append({'name': f"encoding {name}", 'ft': data[name].ft.clone() })
             else: 
-                data[name].ft = self.node_encoders[name](data[name].ft) 
+                data[name].ft = self.node_encoders[name](data[name].ft)
+                self.layer_outputs.append({'name': f"encoding {name}", 'ft': data[name].ft.clone() }) 
             # print(f"node encoder {name}, ft now {data[name].ft.shape}")
 
             # if self.inspect:
@@ -166,18 +170,22 @@ class Net(nn.Module):
                 src, dst = self.alias_to_name(name.split('-'))
                 dst = dst[name.split('-')[0]]
                 data[src, 'global',dst].edge_attr = self.edge_encoders[name](data[src,'global',dst].edge_attr)
+                self.layer_outputs.append({'name': f"readout edge embedding {i} {src}", 'ft': data[src, 'global',dst].edge_attr.clone()})
             else: # this is an interaction layer 
                 # print(name.split('-')[0]) # name is xx-prox, so name.split('-')[0] is xx, so 
                 src = self.alias_map[list(name.split('-')[0])[0]]
                 dst = self.alias_map[list(name.split('-')[0])[1]]
                 edge_name = name.split('-')[1]
                 data[src,edge_name,dst].edge_attr = self.edge_encoders[name](data[src,edge_name,dst].edge_attr)
+                self.layer_outputs.append({'name': f"edge embedding  ({src},{edge_name},{dst})", 'ft': data[src, edge_name,dst].edge_attr.clone()})
+
             
             # if self.inspect:
             #     print(f"edge attribute embedding {name}: {data[src,'conv',dst].edge_attr}")
 
-    def get_node_encoders(self):
+    def get_node_encoders(self, encoder=True):
         node_encoders = nn.ModuleDict()
+        # if encoder ==True: 
         for i in self.field_shorthand: 
             id = self.alias_to_name([i])[0]
             if i in ['p','l','c']: 
@@ -194,7 +202,8 @@ class Net(nn.Module):
                     hyb_types_num=self.hyb_types_num, hyb_embed_dim=self.hyb_embed_dim,
                     binary_features_num=self.atom_feature_dims[1], binary_embed_dim=self.binary_embed_dim,
                     scalar_features_num=self.atom_feature_dims[3], atom_dim_list = self.res_node_dim, ns = self.ns))   
-    
+        # else: # just reshape 
+            
         
         return node_encoders 
 
@@ -209,6 +218,7 @@ class Net(nn.Module):
                 din = self.bond_edge_dim if j in ['lig_bond'] else self.edge_in_dim 
                 edge_encoders[f"{i}-{j}"]=(nn.Sequential(
                     nn.Linear(din, dout),
+                    nn.BatchNorm1d(dout),
                     nn.ReLU(),
                     nn.Dropout(dropout),
                     nn.Linear(dout, dout)))
@@ -217,9 +227,10 @@ class Net(nn.Module):
                 # print(f"readout name is {i}-readout")
                 edge_encoders[f"{i}-readout"]=(nn.Sequential(
                     nn.Linear(din, dout),
+                    nn.BatchNorm1d(dout),
                     nn.ReLU(),
                     nn.Dropout(dropout),
-                    nn.Linear(dout, dout))) 
+                    nn.Linear(dout, dout),)) 
         return edge_encoders
 
     

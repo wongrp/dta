@@ -40,6 +40,17 @@ g = torch.Generator()
 g.manual_seed(seed)
 
         
+
+def track_epoch(preds, trues, ids, out_tracker, rep_tracker ):
+        error = [abs(preds[i]-trues[i]) for i in range(len(preds))]
+        out_tracker.add_performance(preds, trues, error,ids)
+        out_tracker.plot_error_distribution_over_time()
+        out_tracker.plot_pred_vs_true_over_time()
+        rep_tracker.add_performance(preds, trues, error,ids)
+        rep_tracker.finish_epoch() 
+        rep_tracker.analyze()
+
+
 def metrics_reg(targets,predicts):
     mae = metrics.mean_absolute_error(y_true=targets,y_pred=predicts)
     # rmse = metrics.mean_squared_error(y_true=targets,y_pred=predicts,squared=False)
@@ -55,16 +66,20 @@ def metrics_reg(targets,predicts):
     return [mae,rmse,r,sd]
 
 
-def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None):
+def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None, track_every_epoch = 10):
 
     print('start training')
 
     optimizer = torch.optim.Adam(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode = "min", factor = 0.5, patience=5, verbose = True)
 
-    # initialize analysis 
-    analyze = TrackOutput(kf_filepath)
-    rep_tracker = TrackReps(kf_filepath)
+    # initialize trackers
+    train_out_tracker = TrackOutput(kf_filepath,split ='train')
+    train_rep_tracker = TrackReps(kf_filepath,split = 'train')
+    val_out_tracker = TrackOutput(kf_filepath,split = 'val')
+    val_rep_tracker = TrackReps(kf_filepath,split = 'val')
+    test_out_tracker = TrackOutput(kf_filepath,split = 'test')
+    test_rep_tracker = TrackReps(kf_filepath,split='test')
 
     loss_list = []
     best_mae = float('inf')
@@ -76,22 +91,25 @@ def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None
     for epoch in range(args.epochs):
         model.train()
         loss_epoch = 0
+        track = True if epoch%track_every_epoch==0 else False 
         n = 0
         print(f"epoch {epoch}")
+
+        if track: 
+            preds = []
+            trues = []
+            ids = [] 
+
         for batch, data in enumerate(tqdm(train_loader)):
             torch.autograd.set_detect_anomaly(True)
         
-
             s=time.time() 
             e=time.time() 
             optimizer.zero_grad()
             s=time.time() 
-            out = model(data) # out is affinity
+            predict = model(data) # out is affinity
             e=time.time() 
-            # print(f'forward {e-s}s')
-            # print(f'computing mse on {data["ligand"].score.shape}')
-            # loss = F.huber_loss(out, data["ligand"].score, delta = args.huber_delta, reduction = 'mean')+args.l1_reg_weight*torch.mean(torch.abs(out))
-            loss = F.mse_loss(out, data["ligand"].score)+args.l1_reg_weight*torch.mean(torch.abs(out))
+            loss = F.mse_loss(predict, data["ligand"].score)+args.l1_reg_weight*torch.mean(torch.abs(predict))
             loss_epoch += loss.item()
 
             if args.forward_debug: 
@@ -100,11 +118,22 @@ def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None
             s=time.time()
             loss.backward()
             e=time.time() 
-            print(f'backward {e-s}s')
             optimizer.step()
             n += 1
+            
+            if track: 
+                ids.extend(data.id)
+                trues.extend(data["ligand"].score.view(-1).cpu().tolist())
+                preds.extend(predict.view(-1).cpu().tolist())
+                train_rep_tracker.add_(model.layer_outputs)
+
 
         loss_list.append(loss_epoch / n)
+
+        if track_epoch: 
+            track_epoch(preds, trues, ids, train_out_tracker, train_rep_tracker)
+            
+            
         
     
         # wandb.log(logs, step=epoch + 1)
@@ -113,11 +142,16 @@ def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None
 
         print('epoch:', epoch, ' loss:', loss_epoch / n)
 
-        val_err = my_val(model, val_loader, device, scheduler, epoch)
+        if track: 
+            val_err = run_val(model, val_loader, device, scheduler, epoch, val_out_tracker, val_rep_tracker)
+        else: 
+            val_err = run_val(model, val_loader, device, scheduler, epoch)
         val_mae = val_err[0]
         val_rmse = val_err[1]
 
         if val_rmse < best_rmse and val_mae < best_mae:
+
+            
             print('********save model*********')
             torch.save(model.state_dict(), kf_filepath+'/best_model.pt')
             best_mae = val_mae
@@ -128,19 +162,21 @@ def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None
             f_log.write(str_log)
             f_log.close()
             print("running test")
-            test_err = my_test(test_loader, kf_filepath, config, analyze, rep_tracker)
-
-            # log wandb (log everything once, with epoch) 
-            wandb.log({'epoch': epoch, 'training loss': loss_epoch/n, 'learning rate': optimizer.param_groups[0]['lr'], 
-                   'val loss': loss_epoch / n, 'val mae': val_err[0],'val rmse': val_err[1], 'val r': val_err[2],'val sd': val_err[3],
-                   'test mae': test_err[0],'test rmse': test_err[1],'test r': test_err[2],'test sd': test_err[3]})
-    
+            test_err = run_test(test_loader, kf_filepath, config, test_out_tracker, test_rep_tracker)
+            
+            if args.wandb: 
+                # log wandb (log everything once, with epoch) 
+                wandb.log({'epoch': epoch, 'training loss': loss_epoch/n, 'learning rate': optimizer.param_groups[0]['lr'], 
+                    'val loss': loss_epoch / n, 'val mae': val_err[0],'val rmse': val_err[1], 'val r': val_err[2],'val sd': val_err[3],
+                    'test mae': test_err[0],'test rmse': test_err[1],'test r': test_err[2],'test sd': test_err[3]})
+        
         else: 
-            # log wandb (log everything once, with epoch) 
-            wandb.log({'epoch': epoch, 'training loss': loss_epoch/n, 'learning rate': optimizer.param_groups[0]['lr'], 
-                    'val loss': loss_epoch / n, 'val mae': val_err[0],'val rmse': val_err[1], 'val r': val_err[2],'val sd': val_err[3]})
+            if args.wandb: 
+                # log wandb (log everything once, with epoch) 
+                wandb.log({'epoch': epoch, 'training loss': loss_epoch/n, 'learning rate': optimizer.param_groups[0]['lr'], 
+                        'val loss': loss_epoch / n, 'val mae': val_err[0],'val rmse': val_err[1], 'val r': val_err[2],'val sd': val_err[3]})
 
-      
+        
 
     plt.plot(loss_list)
     plt.ylabel('Loss')
@@ -148,14 +184,15 @@ def train(train_loader, val_loader, test_loader, kf_filepath, model, config=None
     plt.savefig(kf_filepath+'/loss.png')
     plt.show() 
     
-    analyze.save_performance() 
-    analyze.plot_error_distribution_over_time()
-    analyze.plot_pred_vs_true_over_time()
+    out_tracker.save_performance() 
+    out_tracker.plot_error_distribution_over_time()
+    out_tracker.plot_pred_vs_true_over_time()
 
 
-def my_val(model, val_loader, device, scheduler, epoch):
-    p_affinity = []
-    y_affinity = []
+def run_val(model, val_loader, device, scheduler, epoch, out_tracker = None, rep_tracker = None):
+    preds = []
+    trues = []
+    ids = []
 
     model.eval()
     loss_epoch = 0
@@ -173,19 +210,28 @@ def my_val(model, val_loader, device, scheduler, epoch):
             print(f"val pred: {predict}")
             print(F"val ground truth: {data['ligand'].score}")
 
-            p_affinity.extend(predict.view(-1).cpu().tolist())
-            y_affinity.extend(data["ligand"].score.view(-1).cpu().tolist())
+            preds.extend(predict.view(-1).cpu().tolist())
+            trues.extend(data["ligand"].score.view(-1).cpu().tolist())
+            ids.extend(data.id)
+
+            if rep_tracker is not None: 
+                # store activations and label with "epoch "
+                rep_tracker.add_(model.layer_outputs)
+
+    if out_tracker is not None and rep_tracker is not None:     
+        track_epoch(preds, trues, ids, out_tracker, rep_tracker)
+
 
 
     scheduler.step(loss_epoch / n)
-    affinity_err = metrics_reg(targets=y_affinity,predicts=p_affinity)
+    affinity_err = metrics_reg(targets=trues,predicts=preds)
     
     return affinity_err
 
 
-def my_test(test_loader, kf_filepath, config, analyze=None, rep_tracker=None):
-    p_affinity = []
-    y_affinity = []
+def run_test(test_loader, kf_filepath, config, out_tracker=None, rep_tracker=None):
+    preds = []
+    trues = []
     ids = [] 
     
 
@@ -203,25 +249,21 @@ def my_test(test_loader, kf_filepath, config, analyze=None, rep_tracker=None):
             # print(f"test pred-score: {predict-data['ligand'].score}")
             # print(f"test pred: {predict}")
             # print(F"test ground truth: {data['ligand'].score}")
-            p_affinity.extend(predict.view(-1).cpu().tolist())
-            y_affinity.extend(data["ligand"].score.view(-1).cpu().tolist())
+            preds.extend(predict.view(-1).cpu().tolist())
+            trues.extend(data["ligand"].score.view(-1).cpu().tolist())
             ids.extend(data.id)
 
             # store activations and label with "epoch "
             rep_tracker.add_(best_model.layer_outputs)
 
+
     
     #### LOG AND PLOT ERRORS AND REPS 
     # add completed list of preds, trues and errors. Then update distribution of errors, preds and trues over time. 
-    print(f"prediction tensor is {len(p_affinity)}")
-    analyze.add_performance(p_affinity, y_affinity, [abs(p_affinity[i]-y_affinity[i]) for i in range(len(p_affinity))],ids)
-    analyze.plot_error_distribution_over_time()
-    analyze.plot_pred_vs_true_over_time()
-    rep_tracker.finish_epoch() 
-    rep_tracker.analyze()
+    print(f"prediction tensor is {len(preds)}")
+    track_epoch(preds, trues, ids, out_tracker, rep_tracker)
 
-
-    affinity_err = metrics_reg(targets=y_affinity,predicts=p_affinity)
+    affinity_err = metrics_reg(targets=trues,predicts=preds)
 
     f_log = open(file=(kf_filepath+"/metrics_log.txt"), mode="a")
     str_log = 'mae: '+ str(affinity_err[0]) + ' rmse: '+ str(affinity_err[1]) + ' r: '+ str(affinity_err[2]) +' sd: '+ str(affinity_err[3]) + '\n'
@@ -230,6 +272,8 @@ def my_test(test_loader, kf_filepath, config, analyze=None, rep_tracker=None):
 
     return affinity_err 
     
+
+
 
 
 
@@ -327,11 +371,11 @@ if __name__ == '__main__':
     print('Model with', numel, 'parameters')
 
     # wandb 
-    if not args.forward_debug: 
+    if args.wandb and not args.forward_debug: 
         wandb.init(
-            entity='wongrp',
+            entity=args.wandb_username,
             settings=wandb.Settings(start_method="fork"),
-            project='mp_dta',
+            project=args.wandb_project_name,
             name= exp_name,
             group=args.wandb_group,
             job_type=args.wandb_jobtype,

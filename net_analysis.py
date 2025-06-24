@@ -15,6 +15,7 @@ import torch
 import json
 import pandas as pd
 from collections import defaultdict
+from sklearn.neighbors import NearestNeighbors
 
 """
 TrackError 
@@ -103,6 +104,7 @@ class DatasetStatistics:
                 "count": count
             })
 
+
         df = pd.DataFrame(self.result_rows)
         csv_path = os.path.join(self.save_dir, f"{self.prefix}_feature_statistics.csv")
         json_path = os.path.join(self.save_dir, f"{self.prefix}_feature_statistics.json")
@@ -115,12 +117,13 @@ class DatasetStatistics:
 
 
 class TrackOutput:
-    def __init__(self, save_dir):
+    def __init__(self, save_dir,split = 'test'):
         self.save_dir = save_dir
+        self.basedir = f'figs/error_progress/{split}'
         os.makedirs(self.save_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.save_dir, "figs/error_progress/per_example"), exist_ok=True)
-        os.makedirs(os.path.join(self.save_dir, "figs/error_progress/scatter_error_per_epoch"), exist_ok=True)
-        os.makedirs(os.path.join(self.save_dir, "figs/error_progress/scatter_preds_per_epoch"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_dir, f"{self.basedir}/per_example"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_dir, f"{self.basedir}/scatter_error_per_epoch"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_dir, f"{self.basedir}/scatter_preds_per_epoch"), exist_ok=True)
 
 
         self.outs = []
@@ -142,6 +145,7 @@ class TrackOutput:
         self.outs.append(out)
         self.scores.append(score)
         self.ae.append(error)
+        # print(f"ae length {len(self.ae)} ad shape {self.ae[0].shape}")
         # print(f"list of ids is {ids}")
         for idx,id in enumerate(ids): 
        
@@ -157,12 +161,13 @@ class TrackOutput:
             self.true_history[id].append(score[idx])
             self.ae_history[id].append(error[idx])
 
+
             # Live plot of performance evolution
             self.plot_id_progress(id)
 
 
     def plot_id_progress(self, id):
-        fig_path = os.path.join(self.save_dir, "figs/error_progress/per_example", f"{id}_progress.png")
+        fig_path = os.path.join(self.save_dir, f"{self.basedir}/per_example", f"{id}_progress.png")
         plt.figure()
         plt.plot(self.true_history[id], label='True', marker='o')
         plt.plot(self.pred_history[id], label='Predicted', marker='x')
@@ -181,6 +186,7 @@ class TrackOutput:
         scores = np.array(self.scores)
         outs = np.array(self.outs)
         ids = np.array(self.ids)
+
 
         best_idx = np.argsort(ae)[:num_examples]
         worst_idx = np.argsort(ae)[-num_examples:]
@@ -241,7 +247,7 @@ class TrackOutput:
             plt.title(f"Epoch {epoch}: Prediction vs Ground Truth")
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(os.path.join(self.save_dir, f"figs/error_progress/scatter_preds_per_epoch/epoch_{epoch}.png"))
+            plt.savefig(os.path.join(self.save_dir, f"{self.basedir}/scatter_preds_per_epoch/epoch_{epoch}.png"))
             plt.close()
 
 
@@ -256,25 +262,33 @@ class TrackOutput:
             plt.ylabel("Frequency")
             plt.grid(True)
             plt.tight_layout()
-            plt.savefig(os.path.join(self.save_dir, f"figs/error_progress/scatter_error_per_epoch/epoch_{epoch}.png"))
+            plt.savefig(os.path.join(self.save_dir, f"{self.basedir}/scatter_error_per_epoch/epoch_{epoch}.png"))
             plt.close()
 
 
 
 
 class TrackReps:
-    def __init__(self, save_dir):
+    def __init__(self, save_dir, split='test'):
         self.save_dir = save_dir
+        self.basedir = f"figs/{split}"
         os.makedirs(self.save_dir, exist_ok=True)
-        os.makedirs(os.path.join(self.save_dir, "figs/rep_stats"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_dir, f"{self.basedir}/rep_statistics"), exist_ok=True)
+        os.makedirs(os.path.join(self.save_dir, f"{self.basedir}/rep_knn"), exist_ok=True)
         self.rep_storage = {}  # tag -> list of (tensor, epoch)
         self.epoch = 1 
         self.epoch_done = True 
+        self.scores = []
+        self.outs = [] 
+        self.ae = [] 
+        self.ids = [] 
+        
 
-    def add(self, tag, tensor, epoch):
+    def add(self, tensor, score, tag, epoch):
         if tag not in self.rep_storage:
             self.rep_storage[tag] = []
         self.rep_storage[tag].append((tensor.detach().cpu(), epoch))
+        
 
     def finish_epoch(self): 
         self.epoch += 1 
@@ -282,8 +296,11 @@ class TrackReps:
     
 
     def add_(self,layer_outputs):
+
         for layer_output in layer_outputs: 
+            
             tag = layer_output['name']
+
             if tag not in self.rep_storage:
                 self.rep_storage[tag] = []
             epoch = self.epoch
@@ -293,8 +310,50 @@ class TrackReps:
                 self.rep_storage[tag].append(tensor.detach().cpu())
             else: 
                 self.rep_storage[tag][-1] = torch.cat([self.rep_storage[tag][-1],tensor.detach().cpu()],dim=0)
+        
         if self.epoch_done: 
-            self.epoch_done = False     
+            self.epoch_done = False   
+
+    def add_performance(self, out, score, error,id):
+        self.outs.append(out)
+        self.ae.append(error)  
+        if len(self.scores)==0:
+            self.scores = np.asarray(score)
+            self.ids = id 
+
+    def knn_on_vectors(self, vecs, scores,k=5):  
+        # vectors: (N,D) (numpy array or torch.Tensor.cpu().numpy())
+        # scores: shape (N) (numpy array)
+        nbrs = NearestNeighbors(n_neighbors=k+1, algorithm='auto', metric='euclidean').fit(vecs)
+        distances, indices = nbrs.kneighbors(vecs)
+        print(f"indices {indices}")
+        neighbors = scores[indices[:,1:]] # skip the first neighbor (it's the point itself)
+
+        return neighbors
+
+    def plot_knn(self, vecs, scores, tag, epoch):
+        neighbors= self.knn_on_vectors(vecs, scores)
+        std_per_point = np.std(neighbors, axis=1)
+        mean_abs_diff_per_point = np.mean(np.abs(neighbors - scores[:, None]), axis=1)
+
+        # Visualize: local smoothness vs score
+        plt.figure(figsize=(12, 5))
+
+        plt.subplot(1, 2, 1)
+        plt.scatter(scores, std_per_point, alpha=0.5)
+        plt.xlabel("Score")
+        plt.ylabel("Std of Neighbor Scores")
+        plt.title("Local Score Variability")
+
+        plt.subplot(1, 2, 2)
+        plt.scatter(scores, mean_abs_diff_per_point, alpha=0.5)
+        plt.xlabel("Score")
+        plt.ylabel("Mean | Neighbor Score - Own Score |")
+        plt.title("Local Mean Absolute Difference")
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(self.save_dir, f"{self.basedir}/rep_knn/{tag}_knn_epoch{epoch}.png"))
+        plt.close()
 
 
     def analyze(self):
@@ -303,6 +362,11 @@ class TrackReps:
             var_by_epoch = []
 
             for epoch, tensor in enumerate(reps):
+                print(f"we've stored {len(self.scores)} scores")
+                print(f"which we will associate with {tensor.shape} hidden vectors")
+                if tensor.shape[0] == len(self.scores):
+                    self.plot_knn(tensor, self.scores, tag, epoch)
+                
                 norms = tensor.norm(dim=-1).numpy()
                 feature_mean = tensor.mean(dim=0).numpy()
                 feature_std = tensor.std(dim=0).numpy()
@@ -317,7 +381,7 @@ class TrackReps:
                 plt.xlabel("||h||")
                 plt.ylabel("# Nodes")
                 plt.tight_layout()
-                plt.savefig(os.path.join(self.save_dir, f"figs/rep_stats/{tag}_norm_epoch{epoch}.png"))
+                plt.savefig(os.path.join(self.save_dir, f"{self.basedir}/rep_statistics/{tag}_norm_epoch{epoch}.png"))
                 plt.close()
 
                 # Plot feature std
@@ -327,7 +391,7 @@ class TrackReps:
                 plt.xlabel("Feature Index")
                 plt.ylabel("Std")
                 plt.tight_layout()
-                plt.savefig(os.path.join(self.save_dir, f"figs/rep_stats/{tag}_featurestd_epoch{epoch}.png"))
+                plt.savefig(os.path.join(self.save_dir, f"{self.basedir}/rep_statistics/{tag}_featurestd_epoch{epoch}.png"))
                 plt.close()
 
             # Optional: track evolution over time
@@ -340,7 +404,7 @@ class TrackReps:
             plt.xlabel("Epoch")
             plt.ylabel("Avg ||h||")
             plt.tight_layout()
-            plt.savefig(os.path.join(self.save_dir, f"figs/rep_stats/{tag}_avg_norms_over_time.png"))
+            plt.savefig(os.path.join(self.save_dir, f"figs/rep_statistics/{tag}_avg_norms_over_time.png"))
             plt.close()
 
             # You can also add PCA spectrum, participation ratio, or CKA here

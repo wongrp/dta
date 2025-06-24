@@ -38,7 +38,7 @@ import torch
 from net_logic import field 
 from e3nn import o3 
 from functools import partial
-from build_graph_ import build_graph, build_readout 
+from net_build_graph import build_graph, build_readout 
 from torch_scatter import scatter_mean 
 
 

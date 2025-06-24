@@ -5,11 +5,14 @@ def get_args():
 
     #  architecture 
     parser.add_argument('--mode', type=str, default='plc',
-                    choices=['plc', 'rlx', 'rlp', 'rl'],
+                    choices=['plc', 'rlx', 'rlp', 'rl','rlpz'],
                     help='Choose graph structure and schedule.')
     
     # WANDB experiment 
     parser.add_argument('--name', type=str, default = None)
+    parser.add_argument('--wandb', action = 'store_true')
+    parser.add_argument('--wandb_username',type=str, default= 'wongrp')
+    parser.add_argument('--wandb_project_name', type=str, default = 'mp_dta')
     parser.add_argument('--wandb_group', type=str, default= None)
     parser.add_argument('--wandb_jobtype', type=str, default = None)
     parser.add_argument('--learning_rate', type=float, default=0.001, help='Learning rate for optimizer')
